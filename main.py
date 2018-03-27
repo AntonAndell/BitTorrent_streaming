@@ -4,36 +4,45 @@ import ipaddress, struct
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
 DEFAULT_PORT = "55308"
-def download(torrent_file):
-    with open(torrent_file, "rb") as fs:
-    #print(torrent.read())
-        torrent = bencoder.decode(fs.read())
-    tracker = torrent[b'announce']
-    info_hash = hashlib.sha1(bencoder.encode(torrent[b'info'])).digest()
-    payload = {}
+class Torrent(object):
+    def __init__(self, torrent_path, port=DEFAULT_PORT):
+        self.torrent_dict = self.get_torrent_dict(torrent_path)
+        self.peer_addresses = []
+        self.port = port
 
-    peer_id = ('-DR' + VERSION + ''.join(random.sample(ALPHANUM, 13)))
-    assert len(peer_id) == 20
-    payload['info_hash'] = info_hash
-    payload['peer_id'] = peer_id
-    payload['port'] = DEFAULT_PORT
-    payload['uploaded'] = '0'
-    payload['downloaded'] = '0'
-    payload['left'] = str(torrent[b'info'][b'length'])
-    payload['compact'] = '1'
-    payload['supportcrypto'] = '1'
-    payload['event'] = 'started'
 
-    r = requests.get(tracker, params=payload)
-    peers_data = bencoder.decode(r.content)[b'peers']
+    @property
+    def torrent_payload(self):
+        payload = {}
+        info_hash = hashlib.sha1(bencoder.encode(self.torrent_dict[b'info'])).digest()
+        peer_id = ('-DR' + VERSION + ''.join(random.sample(ALPHANUM, 13)))
+        payload['info_hash'] = info_hash
+        payload['peer_id'] = peer_id
+        payload['port'] = self.port
+        payload['uploaded'] = '0'
+        payload['downloaded'] = '0'
+        payload['left'] = str(self.torrent_dict[b'info'][b'length'])
+        payload['compact'] = '1'
+        payload['supportcrypto'] = '1'
+        payload['event'] = 'started'
+        return payload
 
-    peer_ips = []
-    for i in range(0,len(peers_data), 6):
-        addres_bytes = peers_data[i:i+4]
-        port_bytes = peers_data[i+4:i+6]
-        ip_addr = str(ipaddress.IPv4Address(addres_bytes))
-        port = struct.unpack('>H', port_bytes)
-        peer_ips.append((ip_addr, *port))
-    print(peer_ips)
+    def get_peer_addresses(self):
+        tracker_adress = self.torrent_dict[b'announce']
+        r = requests.get(tracker_adress, params=self.torrent_payload)
+        peers_data = bencoder.decode(r.content)[b'peers']
+        for i in range(0,len(peers_data), 6):
+            addres_bytes = peers_data[i:i+4]
+            port_bytes = peers_data[i+4:i+6]
+            ip_addr = str(ipaddress.IPv4Address(addres_bytes))
+            port = struct.unpack('>H', port_bytes)
+            self.peer_addresses.append((ip_addr, *port))
 
-download("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
+    def get_torrent_dict(self, torrent_path):
+        with open(torrent_path, "rb") as fs:
+            torrent = bencoder.decode(fs.read())
+        return torrent
+
+t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
+t.get_peer_addresses()
+print(t.peer_addresses)
