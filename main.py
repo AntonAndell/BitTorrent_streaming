@@ -68,12 +68,19 @@ class Peer(object):
         self.port = port
         self.torrent = torrent
         self.s = None
+
     @property
     def address(self):
         return (self.ip, (self.port))
+
+    def msg_function(self, msg_type):
+        #TODO add alot more types
+        return {5:self.bitfield_msg,1:self.unchoke_msg}[msg_type]
+
     def get_packet(self):
         handshake = bytes(chr(19), "utf-8") + b"BitTorrent protocol" + bytes(8*chr(0), "utf-8") + self.torrent.info_hash + bytes(self.torrent.peer_id, "utf-8")
         return handshake
+
     def handshake(self):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setblocking(True)
@@ -82,18 +89,56 @@ class Peer(object):
         print("connected")
         self.s.send(self.get_packet())
         data = self.s.recv(68)
+        #TODO get location info through external source and other properties
         if not data:
-            print("nope")
+            print("no data")
+            return
         print('From {} received: {}'.format(self.s.fileno(), repr(data)))
+        self.msg_loop()
+        self.s.setblocking(False)
+    def msg_loop(self):
+        while True:
+            try:
+                data = self.s.recv(5)
+            except socket.timeout:
+                pass
+            if not self.choked:
+                self.request_piece()
+            try:
+                print("reviced type {}".format(data[4]))
+            except:
+                print("somethinig went wrong data =".format(data))
+                return
+            size = int.from_bytes(data[0:4], byteorder='big')
+            self.msg_function(data[4])(size)
+            #TODO check data
+
+    def send_interest(self):
+        msg = struct.pack('>Ib', 1, 2)
+        print("sending intrest msg = {}".format(msg))
+        self.s.send(msg)
+
+    def bitfield_msg(self, size):
+        data= self.s.recv(size)
+        #TODO check if peer has any picecs we want:
+        interested = True
+        if interested:
+            self.send_interest()
+    def unchoke_msg(self, size):
+        self.choked = False
+        print("we are now unchoked")
 t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
 print("begin")
 for x in range(len(t.peer_addresses)):
-
+    print(t.peer_addresses[x][0],t.peer_addresses[x][1])
+    print(socket.gethostname())
+    p = Peer(t.peer_addresses[x][0],t.peer_addresses[x][1], t)
+    p.handshake()
+    break;
     try:
-        p = Peer(t.peer_addresses[x][0],t.peer_addresses[x][1], t)
-        p.handshake()
+
         pass
-    except:
+    except socket.timeout:
         print("prob timeout1")
         pass
