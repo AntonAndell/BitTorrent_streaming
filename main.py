@@ -2,13 +2,15 @@ import sys, bencoder, requests, hashlib, random
 from string import ascii_letters, digits
 import ipaddress, struct
 import socket
+from bitstring import BitArray
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
 DEFAULT_PORT = "55308"
 
-CLIENT_NAME = "pytorrent"
+CLIENT_NAME = "mytorrent"
 CLIENT_ID = "PY"
 CLIENT_VERSION = "0001"
+REQUEST_SIZE = 2 ** 14
 def generate_peer_id():
 	""" Returns a 20-byte peer id. """
 
@@ -67,6 +69,8 @@ class Peer(object):
         self.ip = ip
         self.port = port
         self.torrent = torrent
+        """will be a long binary string with each index of the string says if peer got that piece (1) or not (0)"""
+        self.bitfield = ""
         self.s = None
 
     @property
@@ -100,18 +104,19 @@ class Peer(object):
         while True:
             try:
                 data = self.s.recv(5)
+                try:
+                    print("reviced type {}".format(data[4]))
+                    size = int.from_bytes(data[0:4], byteorder='big')
+                    self.msg_function(data[4])(size)
+                except:
+                    pass
             except socket.timeout:
                 pass
-            if not self.choked:
-                self.request_piece()
-            try:
-                print("reviced type {}".format(data[4]))
-            except:
-                print("somethinig went wrong data =".format(data))
-                return
-            size = int.from_bytes(data[0:4], byteorder='big')
-            self.msg_function(data[4])(size)
+
             #TODO check data
+
+    def request_piece(self):
+        pass
 
     def send_interest(self):
         msg = struct.pack('>Ib', 1, 2)
@@ -120,13 +125,58 @@ class Peer(object):
 
     def bitfield_msg(self, size):
         data= self.s.recv(size)
+        print(data)
+        print("printing array")
+        print(BitArray(hex=data).bin)
+
         #TODO check if peer has any picecs we want:
         interested = True
         if interested:
             self.send_interest()
     def unchoke_msg(self, size):
         self.choked = False
-        print("we are now unchoked")
+
+        print("we are now unchoked requesting a piece")
+        self.request_piece()
+
+
+class piece(object):
+    """
+    index: the index of the piece
+    size: size in bytes
+    block_offset: the place where the next block to be requested starts
+    blocksize: REQUEST SIZE 2^14 standard value
+    blocks: array of which blocks we go
+    last_blocksize: incase size // blocksize is not even
+    """
+    def __init__(index, size , block_offset=0):
+        self.index = index
+        self.size = size
+        self.block_offset = block_offset
+        self.blocks = []
+        if not (size%REQUEST_SIZE == 0):
+            self.block_count = size//REQUEST_SIZE + 1
+            self.last_blocksize = size%REQUEST_SIZE
+        else:
+            self.block_count = size//REQUEST_SIZE
+            self.last_blocksize = REQUEST_SIZE
+    #TODO make this so you can request specific blocks
+    def get_block_msg(self):
+        if(self.block_offset + REQUEST_SIZE > self.size):
+            block_size = self.last_blocksize
+        else:
+            block_size = REQUEST_SIZE
+        msg = struct.pack('>IbIII', 13, 6, self.index, self.block_offset, block_size)
+        return msg
+    def add_block(self, data):
+        self.blocks[self.block_offset/REQUEST_SIZE] = data
+        if self.block_offset + REQUEST_SIZE >= self.size:
+            return True
+        else:
+            self.block_offset += REQUEST_SIZE
+            return False
+
+
 t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
 print("begin")
