@@ -5,12 +5,27 @@ import socket
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
 DEFAULT_PORT = "55308"
+
+CLIENT_NAME = "pytorrent"
+CLIENT_ID = "PY"
+CLIENT_VERSION = "0001"
+def generate_peer_id():
+	""" Returns a 20-byte peer id. """
+
+	# As Azureus style seems most popular, we'll be using that.
+	# Generate a 12 character long string of random numbers.
+	random_string = ""
+	while len(random_string) != 12:
+		random_string = random_string + random.choice("1234567890")
+
+	return "-" + CLIENT_ID + CLIENT_VERSION + "-" + random_string
+
 class Torrent(object):
     def __init__(self, torrent_path, port=DEFAULT_PORT):
         self.torrent_dict = self.get_torrent_dict(torrent_path)
         self.peer_addresses = []
         self.port = port
-        self.peer_id = peer_id = ('-DR' + VERSION + ''.join(random.sample(ALPHANUM, 13)))
+        self.peer_id = generate_peer_id()
     @property
     def torrent_payload(self):
         payload = {}
@@ -27,8 +42,8 @@ class Torrent(object):
 
     @property
     def info_hash(self):
-        info_hash = hashlib.sha1(bencoder.encode(self.torrent_dict[b'info'])).digest()
-        return info_hash
+        info_hash = hashlib.sha1(bencoder.encode(self.torrent_dict[b'info']))
+        return info_hash.digest()
     def get_peer_addresses(self):
         tracker_adress = self.torrent_dict[b'announce']
         r = requests.get(tracker_adress, params=self.torrent_payload)
@@ -57,22 +72,28 @@ class Peer(object):
     def address(self):
         return (self.ip, (self.port))
     def get_packet(self):
-        params = []
-        params.append(chr(len("BitTorrent protocol")))
-        params.append("BitTorrent protocol")
-        params.append(str(chr(0)*8))
-        params.append(str(self.torrent.info_hash))
-        params.append(self.torrent.peer_id)
-        return ''.join(params)
+        handshake = bytes(chr(19), "utf-8") + b"BitTorrent protocol" + bytes(8*chr(0), "utf-8") + self.torrent.info_hash + bytes(self.torrent.peer_id, "utf-8")
+        return handshake
     def handshake(self):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setblocking(True)
+        self.s.settimeout(0.5)
         self.s.connect(self.address)
+        print("connected")
         self.s.send(self.get_packet())
         data = self.s.recv(68)
-        print(data)
+        if not data:
+            print("nope")
+        print('From {} received: {}'.format(self.s.fileno(), repr(data)))
 t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
-print(t.peer_addresses[0][0],t.peer_addresses[0][1])
-p = Peer(t.peer_addresses[0][0],t.peer_addresses[0][1], t)
-p.handshake()
+print("begin")
+for x in range(len(t.peer_addresses)):
+
+    try:
+        p = Peer(t.peer_addresses[x][0],t.peer_addresses[x][1], t)
+        p.handshake()
+        pass
+    except:
+        print("prob timeout1")
+        pass
