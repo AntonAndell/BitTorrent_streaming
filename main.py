@@ -2,6 +2,7 @@ import sys, bencoder, requests, hashlib, random
 from string import ascii_letters, digits
 import ipaddress, struct
 import socket
+import time
 from bitstring import BitArray
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
@@ -29,7 +30,7 @@ class Torrent(object):
         self.port = port
         self.peer_id = generate_peer_id()
         self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
-        self.bitfield = ["0"]*50000
+        self.bitfield = ["0"]*(len(self.torrent_dict[b"info"][b"pieces"])//20)
     @property
     def torrent_payload(self):
         payload = {}
@@ -132,22 +133,31 @@ class Peer(object):
                 return
             else:
                 i += 1
+        print("peer empty")
+        exit()
 
     def piece_msg(self, size):
-        print(size)
+        print("starting recv")
+        data = self.s.recv(8)
+        print(data)
+        size -= 8
         data = b''
 
         while len(data) < size-1:
             packet = self.s.recv(size - len(data))
             if not packet:
-                print("yep2")
                 return None
             data += packet
         print(len(data))
         if (self.current_piece.add_block(data)):
-            print("im here12")
-            self.torrent.bitfield[int(self.current_piece.index)] = "1"
-            print("im here for some reason")
+            if(self.current_piece.verify_piece(self.torrent.torrent_dict[b"info"][b"pieces"][self.current_piece.index: self.current_piece.index + 20])):
+                self.torrent.bitfield[int(self.current_piece.index)] = "1"
+                a = self.torrent.bitfield.count("0")
+                print(a)
+                if (a == 0):
+                    print("we are done")
+                    exit()
+                self.request_piece()
             pass
             #TODO request next piece
         else:
@@ -196,7 +206,7 @@ class Piece(object):
         else:
             self.block_count = size//REQUEST_SIZE
             self.last_blocksize = REQUEST_SIZE
-        self.blocks = [None]*self.block_count
+        self.blocks = b""
     #TODO make this so you can request specific blocks
     def get_block_msg(self):
         if(self.block_offset + REQUEST_SIZE > self.size):
@@ -206,24 +216,24 @@ class Piece(object):
         msg = struct.pack('>IbIII', 13, 6, self.index, self.block_offset, block_size)
         return msg
     def add_block(self, data):
-        print("might be here")
-        print (self.block_offset//REQUEST_SIZE)
-        self.blocks[self.block_offset//REQUEST_SIZE] = data
-        print("might be here or here")
+        print ("index of block {}, index of piece {}".format(self.block_offset//REQUEST_SIZE, self.index))
+        self.blocks += data
         if self.block_offset + REQUEST_SIZE >= self.size:
             #piece done
-            print("done")
-            print(len(self.blocks))
             return True
         else:
-            print(len(self.blocks))
-            print("herer")
             self.block_offset += REQUEST_SIZE
             return False
+    def verify_piece(self, hash):
+        print (hashlib.sha1(self.blocks).digest() == hash)
+        return True
+
 
 
 t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
+print(t.torrent_dict[b"info"][b"piece length"])
+print(len(t.torrent_dict[b"info"][b"pieces"])//20)
 print("begin")
 for x in range(len(t.peer_addresses)):
     print(t.peer_addresses[x][0],t.peer_addresses[x][1])
