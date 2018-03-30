@@ -28,6 +28,8 @@ class Torrent(object):
         self.peer_addresses = []
         self.port = port
         self.peer_id = generate_peer_id()
+        self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
+        self.bitfield = "0"*50000
     @property
     def torrent_payload(self):
         payload = {}
@@ -79,7 +81,7 @@ class Peer(object):
 
     def msg_function(self, msg_type):
         #TODO add alot more types
-        return {5:self.bitfield_msg,1:self.unchoke_msg}[msg_type]
+        return {5:self.bitfield_msg,1:self.unchoke_msg, 4:self.have_msg, 7:self.piece_msg, 0:self.choke_msg}[msg_type]
 
     def get_packet(self):
         handshake = bytes(chr(19), "utf-8") + b"BitTorrent protocol" + bytes(8*chr(0), "utf-8") + self.torrent.info_hash + bytes(self.torrent.peer_id, "utf-8")
@@ -93,54 +95,80 @@ class Peer(object):
         print("connected")
         self.s.send(self.get_packet())
         data = self.s.recv(68)
+        self.current_piece = None
         #TODO get location info through external source and other properties
         if not data:
             print("no data")
             return
         print('From {} received: {}'.format(self.s.fileno(), repr(data)))
+        self.s.setblocking(True)
         self.msg_loop()
-        self.s.setblocking(False)
+
     def msg_loop(self):
         while True:
+            data = self.s.recv(5)
             try:
-                data = self.s.recv(5)
-                try:
-                    print("reviced type {}".format(data[4]))
-                    size = int.from_bytes(data[0:4], byteorder='big')
-                    self.msg_function(data[4])(size)
-                except:
-                    pass
-            except socket.timeout:
+                print (data)
+                print("reviced type {}".format(data[4]))
+                size = int.from_bytes(data[0:4], byteorder='big')
+                self.msg_function(data[4])(size)
+            except IndexError:
                 pass
-
+            except KeyError:
+                print("KeyError")
             #TODO check data
 
     def request_piece(self):
-        pass
+        i = 0
+        print(self.torrent.pieces)
+        while i < self.torrent.pieces:
+            #TODO selcet by algorithms
+            print(self.bitfield[i])
+            if self.torrent.bitfield[i] == "0" and self.bitfield[i] == "1":
+                self.current_piece = Piece(i, self.torrent.torrent_dict[b'info'][b'piece length'], block_offset = REQUEST_SIZE)
+                self.s.send(self.current_piece.get_block_msg())
+                print("sending piece request msg = {}".format(self.current_piece.get_block_msg()))
+                return
+            else:
+                i += 1
 
+    def piece_msg(self, size):
+        print(size)
+        data = b''
+        while len(data) < size-1:
+            packet = self.s.recv(size - len(data))
+            if not packet:
+                return None
+            data += packet
+            print(len(data))
+        print(data)
+        print(len(data))
+        exit()
+        pass
     def send_interest(self):
         msg = struct.pack('>Ib', 1, 2)
         print("sending intrest msg = {}".format(msg))
+        self.interested = True
         self.s.send(msg)
 
     def bitfield_msg(self, size):
         data= self.s.recv(size)
-        print(data)
-        print("printing array")
-        print(BitArray(hex=data).bin)
-
+        self.bitfield = str(bin(int.from_bytes(data, byteorder='big')))[2:]
         #TODO check if peer has any picecs we want:
         interested = True
         if interested:
             self.send_interest()
+    def have_msg(self, size):
+        self.s.recv(size)
     def unchoke_msg(self, size):
         self.choked = False
+        if self.interested:
+            print("we are now unchoked requesting a piece")
+            self.request_piece()
+    def choke_msg(self,size):
+        print("chooking")
 
-        print("we are now unchoked requesting a piece")
-        self.request_piece()
-
-
-class piece(object):
+class Piece(object):
     """
     index: the index of the piece
     size: size in bytes
@@ -149,7 +177,7 @@ class piece(object):
     blocks: array of which blocks we go
     last_blocksize: incase size // blocksize is not even
     """
-    def __init__(index, size , block_offset=0):
+    def __init__(self, index, size , block_offset=0):
         self.index = index
         self.size = size
         self.block_offset = block_offset
