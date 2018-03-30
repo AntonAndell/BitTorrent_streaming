@@ -29,7 +29,7 @@ class Torrent(object):
         self.port = port
         self.peer_id = generate_peer_id()
         self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
-        self.bitfield = "0"*50000
+        self.bitfield = ["0"]*50000
     @property
     def torrent_payload(self):
         payload = {}
@@ -114,6 +114,7 @@ class Peer(object):
                 self.msg_function(data[4])(size)
             except IndexError:
                 pass
+                print("hahah yep")
             except KeyError:
                 print("KeyError")
             #TODO check data
@@ -125,7 +126,7 @@ class Peer(object):
             #TODO selcet by algorithms
             print(self.bitfield[i])
             if self.torrent.bitfield[i] == "0" and self.bitfield[i] == "1":
-                self.current_piece = Piece(i, self.torrent.torrent_dict[b'info'][b'piece length'], block_offset = REQUEST_SIZE)
+                self.current_piece = Piece(i, self.torrent.torrent_dict[b'info'][b'piece length'],)
                 self.s.send(self.current_piece.get_block_msg())
                 print("sending piece request msg = {}".format(self.current_piece.get_block_msg()))
                 return
@@ -135,16 +136,23 @@ class Peer(object):
     def piece_msg(self, size):
         print(size)
         data = b''
+
         while len(data) < size-1:
             packet = self.s.recv(size - len(data))
             if not packet:
+                print("yep2")
                 return None
             data += packet
-            print(len(data))
-        print(data)
         print(len(data))
-        exit()
-        pass
+        if (self.current_piece.add_block(data)):
+            print("im here12")
+            self.torrent.bitfield[int(self.current_piece.index)] = "1"
+            print("im here for some reason")
+            pass
+            #TODO request next piece
+        else:
+            print("requesting next block")
+            self.s.send(self.current_piece.get_block_msg())
     def send_interest(self):
         msg = struct.pack('>Ib', 1, 2)
         print("sending intrest msg = {}".format(msg))
@@ -181,13 +189,14 @@ class Piece(object):
         self.index = index
         self.size = size
         self.block_offset = block_offset
-        self.blocks = []
+
         if not (size%REQUEST_SIZE == 0):
             self.block_count = size//REQUEST_SIZE + 1
             self.last_blocksize = size%REQUEST_SIZE
         else:
             self.block_count = size//REQUEST_SIZE
             self.last_blocksize = REQUEST_SIZE
+        self.blocks = [None]*self.block_count
     #TODO make this so you can request specific blocks
     def get_block_msg(self):
         if(self.block_offset + REQUEST_SIZE > self.size):
@@ -197,10 +206,18 @@ class Piece(object):
         msg = struct.pack('>IbIII', 13, 6, self.index, self.block_offset, block_size)
         return msg
     def add_block(self, data):
-        self.blocks[self.block_offset/REQUEST_SIZE] = data
+        print("might be here")
+        print (self.block_offset//REQUEST_SIZE)
+        self.blocks[self.block_offset//REQUEST_SIZE] = data
+        print("might be here or here")
         if self.block_offset + REQUEST_SIZE >= self.size:
+            #piece done
+            print("done")
+            print(len(self.blocks))
             return True
         else:
+            print(len(self.blocks))
+            print("herer")
             self.block_offset += REQUEST_SIZE
             return False
 
