@@ -150,7 +150,7 @@ class Peer(object):
             data += packet
         print(len(data))
         if (self.current_piece.add_block(data)):
-            if(self.current_piece.verify_piece(self.torrent.torrent_dict[b"info"][b"pieces"][self.current_piece.index: self.current_piece.index + 20])):
+            if(self.current_piece.verify_piece(self.torrent.torrent_dict[b"info"][b"pieces"][self.current_piece.index*20: self.current_piece.index*20 + 20])):
                 self.torrent.bitfield[int(self.current_piece.index)] = "1"
                 a = self.torrent.bitfield.count("0")
                 print(a)
@@ -158,8 +158,7 @@ class Peer(object):
                     print("we are done")
                     exit()
                 self.request_piece()
-            pass
-            #TODO request next piece
+                
         else:
             print("requesting next block")
             self.s.send(self.current_piece.get_block_msg())
@@ -225,6 +224,10 @@ class Piece(object):
             self.block_offset += REQUEST_SIZE
             return False
     def verify_piece(self, hash):
+        if hashlib.sha1(self.blocks).digest() != hash:
+            print(hashlib.sha1(self.blocks).digest())
+            print(hash)
+            time.sleep(5)
         print (hashlib.sha1(self.blocks).digest() == hash)
         return True
 
