@@ -80,7 +80,7 @@ class Torrent(object):
             port_bytes = peers_data[i+4:i+6]
             ip_addr = str(ipaddress.IPv4Address(addres_bytes))
             port = struct.unpack('>H', port_bytes)
-            self.peer_addresses.append((ip_addr, *port))
+            self.peer_addresses.append((ip_addr, port[0]))
 
     def get_torrent_dict(self, torrent_path):
         with open(torrent_path, "rb") as fs:
