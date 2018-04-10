@@ -2,7 +2,9 @@ import sys, bencoder, requests, hashlib, random
 from string import ascii_letters, digits
 import ipaddress, struct
 import socket
-import time
+import time, sys
+import threading
+
 from bitstring import BitArray
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
@@ -23,11 +25,22 @@ def generate_peer_id():
 
 	return "-" + CLIENT_ID + CLIENT_VERSION + "-" + random_string
 
+class myThread (threading.Thread):
+   def __init__(self, threadID, name, peer):
+      threading.Thread.__init__(self)
+      self.threadID = threadID
+      self.name = name
+      self.peer = peer
+   def run(self):
+      print( "Starting " + self.name)
+      self.peer.handshake()
+
 class Torrent(object):
     def __init__(self, torrent_path, port=DEFAULT_PORT):
         self.torrent_dict = self.get_torrent_dict(torrent_path)
         self.peer_addresses = []
         self.port = port
+        self.lock = threading.Lock()
         self.peer_id = generate_peer_id()
         self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
         self.bitfield = ["0"]*(len(self.torrent_dict[b"info"][b"pieces"])//20)
@@ -49,6 +62,15 @@ class Torrent(object):
     def info_hash(self):
         info_hash = hashlib.sha1(bencoder.encode(self.torrent_dict[b'info']))
         return info_hash.digest()
+    def get_random_peer(self):
+        return random.choice(self.peer_addresses)
+    def download(self):
+        for x in range(5):
+            addr = random.choice(self.peer_addresses)
+            peer = Peer(addr[0],addr[1], self, "peer-" + str(x))
+            thread = myThread(x, "peer-" + str(x), peer)
+            thread.start()
+
     def get_peer_addresses(self):
         tracker_adress = self.torrent_dict[b'announce']
         r = requests.get(tracker_adress, params=self.torrent_payload)
@@ -64,9 +86,19 @@ class Torrent(object):
         with open(torrent_path, "rb") as fs:
             torrent = bencoder.decode(fs.read())
         return torrent
+    """
+    def get_next_piece():
+        for i in range(len(bitfield)):
+            if bitfield[i] == "0":
+                bitfield[i] == "-"
+                return i
+    """
+
+
 
 class Peer(object):
-    def __init__(self, ip, port, torrent):
+    def __init__(self, ip, port, torrent, thread_name):
+        self.thread_name = thread_name
         self.choked = True
         self.interested = False
         self.ip = ip
@@ -75,11 +107,17 @@ class Peer(object):
         """will be a long binary string with each index of the string says if peer got that piece (1) or not (0)"""
         self.bitfield = ""
         self.s = None
+        self.current_piece_index = 0
 
     @property
     def address(self):
         return (self.ip, (self.port))
-
+    def change_peer_and_handshake(self):
+        print("changing peer")
+        new_peer = self.torrent.get_random_peer()
+        self.ip = new_peer[0]
+        self.port = new_peer[1]
+        self.handshake()
     def msg_function(self, msg_type):
         #TODO add alot more types
         return {5:self.bitfield_msg,1:self.unchoke_msg, 4:self.have_msg, 7:self.piece_msg, 0:self.choke_msg}[msg_type]
@@ -92,63 +130,67 @@ class Peer(object):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setblocking(True)
         self.s.settimeout(0.5)
-        self.s.connect(self.address)
-        print("connected")
-        self.s.send(self.get_packet())
-        data = self.s.recv(68)
+        try:
+            self.s.connect(self.address)
+            print("connected")
+            self.s.send(self.get_packet())
+            data = self.s.recv(68)
+        except:
+            self.change_peer_and_handshake()
+
         self.current_piece = None
         #TODO get location info through external source and other properties
         if not data:
-            print("no data")
-            return
-        print('From {} received: {}'.format(self.s.fileno(), repr(data)))
-        self.s.setblocking(True)
+            self.change_peer_and_handshake()
+        self.s.settimeout(0.5)
         self.msg_loop()
 
     def msg_loop(self):
         while True:
-            data = self.s.recv(5)
             try:
-                print (data)
-                print("reviced type {}".format(data[4]))
-                size = int.from_bytes(data[0:4], byteorder='big')
-                self.msg_function(data[4])(size)
-            except IndexError:
-                pass
-                print("hahah yep")
-            except KeyError:
-                print("KeyError")
-            #TODO check data
+                data = self.s.recv(5)
+                try:
+                    size = int.from_bytes(data[0:4], byteorder='big')
+                    self.msg_function(data[4])(size)
+                except IndexError:
+                    print("hahah yep")
+                except KeyError:
+                    print("KeyError")
+            except socket.error as e:
+                print(e)
+                self.change_peer_and_handshake()
+
+                #TODO check data
 
     def request_piece(self):
+        if self.choked:
+            return
         i = 0
-        print(self.torrent.pieces)
-        while i < self.torrent.pieces:
+        self.torrent.lock.acquire()
+        while self.current_piece_index  < self.torrent.pieces:
             #TODO selcet by algorithms
-            print(self.bitfield[i])
-            if self.torrent.bitfield[i] == "0" and self.bitfield[i] == "1":
-                self.current_piece = Piece(i, self.torrent.torrent_dict[b'info'][b'piece length'],)
+            if self.torrent.bitfield[self.current_piece_index ] == "0" and self.bitfield[self.current_piece_index ] == "1":
+                self.torrent.bitfield[self.current_piece_index] = "-"
+                self.torrent.lock.release()
+                self.current_piece = Piece(self.current_piece_index , self.torrent.torrent_dict[b'info'][b'piece length'],)
                 self.s.send(self.current_piece.get_block_msg())
-                print("sending piece request msg = {}".format(self.current_piece.get_block_msg()))
                 return
             else:
-                i += 1
+                if i > 5:
+                    self.change_peer_and_handshake()
+                self.current_piece_index += 1
         print("peer empty")
-        exit()
+        self.change_peer_and_handshake()
 
     def piece_msg(self, size):
-        print("starting recv")
         data = self.s.recv(8)
-        print(data)
         size -= 8
         data = b''
-
         while len(data) < size-1:
             packet = self.s.recv(size - len(data))
             if not packet:
                 return None
             data += packet
-        print(len(data))
         if (self.current_piece.add_block(data)):
             if(self.current_piece.verify_piece(self.torrent.torrent_dict[b"info"][b"pieces"][self.current_piece.index*20: self.current_piece.index*20 + 20])):
                 self.torrent.bitfield[int(self.current_piece.index)] = "1"
@@ -158,9 +200,8 @@ class Peer(object):
                     print("we are done")
                     exit()
                 self.request_piece()
-                
+            #TODO request next piece
         else:
-            print("requesting next block")
             self.s.send(self.current_piece.get_block_msg())
     def send_interest(self):
         msg = struct.pack('>Ib', 1, 2)
@@ -183,7 +224,8 @@ class Peer(object):
             print("we are now unchoked requesting a piece")
             self.request_piece()
     def choke_msg(self,size):
-        print("chooking")
+        self.change_peer_and_handshake()
+
 
 class Piece(object):
     """
@@ -215,7 +257,6 @@ class Piece(object):
         msg = struct.pack('>IbIII', 13, 6, self.index, self.block_offset, block_size)
         return msg
     def add_block(self, data):
-        print ("index of block {}, index of piece {}".format(self.block_offset//REQUEST_SIZE, self.index))
         self.blocks += data
         if self.block_offset + REQUEST_SIZE >= self.size:
             #piece done
@@ -235,18 +276,4 @@ class Piece(object):
 
 t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
-print(t.torrent_dict[b"info"][b"piece length"])
-print(len(t.torrent_dict[b"info"][b"pieces"])//20)
-print("begin")
-for x in range(len(t.peer_addresses)):
-    print(t.peer_addresses[x][0],t.peer_addresses[x][1])
-    print(socket.gethostname())
-    p = Peer(t.peer_addresses[x][0],t.peer_addresses[x][1], t)
-    p.handshake()
-    break;
-    try:
-
-        pass
-    except socket.timeout:
-        print("prob timeout1")
-        pass
+t.download()
