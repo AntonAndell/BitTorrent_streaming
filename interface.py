@@ -4,6 +4,7 @@ from tkinter import font
 class App:
 
     def __init__(self, master):
+
         #Our main frame, containing everything.
         self.frame = Frame(
             master,
@@ -57,7 +58,14 @@ class App:
         self.fullscreen_button.pack(side=RIGHT, padx=5, pady=10)
 
     def open_dialog(self):
-        magnet_dialog = self.magnet_dialog = Toplevel(self.frame, bg="#303030")
+
+        #The dialog window.
+        magnet_dialog = self.magnet_dialog = Toplevel(
+            self.frame,
+            bg="#303030"
+        )
+
+        #The white text.
         label = Label(
             magnet_dialog,
             text = "Magnet link:",
@@ -67,6 +75,7 @@ class App:
         )
         label.pack(pady=8)
 
+        #The text box.
         self.magnet_entry = Entry(
             magnet_dialog,
             fg                 = "white",
@@ -79,6 +88,7 @@ class App:
         )
         self.magnet_entry.pack(padx=10)
 
+        #The button.
         stream_button = Button(
             magnet_dialog,
             text               = "Stream",
