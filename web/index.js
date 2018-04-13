@@ -4,16 +4,18 @@ connButton.addEventListener("click", doConnect, false);
 function doConnect() {
     var theSocketId = 0;
     console.log("connect")
+
+    var tcp = chrome.sockets.tcp;
     /*
-    chrome.socket.create("tcp", null, function(createInfo) {
+    tcp.create(null, function(createInfo) {
         alert(createInfo.socketId);
         theSocketId = createInfo.socketId;
-     });
-     chrome.socket.connect(theSocketId, "http://www.yahoo.com", 80, function(result) {
+    });
+    tcp.connect(theSocketId, "http://www.yahoo.com", 80, function(result) {
         alert(result);
-     });
-    chrome.socket.read(theSocketId, 1000, function(readInfo) {
-      alert(readInfo.resultCode);
-  });
+    });
+    tcp.read(theSocketId, 1000, function(readInfo) {
+        alert(readInfo.resultCode);
+    });
   */
-  }
+}
