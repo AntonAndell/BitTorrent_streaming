@@ -26,20 +26,34 @@ def generate_peer_id():
 	return "-" + CLIENT_ID + CLIENT_VERSION + "-" + random_string
 
 class myThread (threading.Thread):
-   def __init__(self, threadID, name, peer):
-      threading.Thread.__init__(self)
-      self.threadID = threadID
-      self.name = name
-      self.peer = peer
-   def run(self):
-      print( "Starting " + self.name)
-      self.peer.handshake()
+    def __init__(self, threadID, name, peer):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+        self.peer = peer
+    def run(self):
+        print( "Starting " + self.name)
+        while not self.peer.handshake():
+            self.change_peer()
+        while 1:
+            self.peer.msg_loop()
+            self.change_peer()
+
+
+    def change_peer(self):
+        self.peer = self.peer.torrent.get_random_peer()
+        while not self.peer.handshake():
+                self.peer = self.peer.torrent.get_random_peer()
+
+
 
 class Torrent(object):
     def __init__(self, torrent_path, port=DEFAULT_PORT):
         self.torrent_dict = self.get_torrent_dict(torrent_path)
         self.peer_addresses = []
         self.port = port
+        self.handshaked_peers = {}
+        self.threads = []
         self.lock = threading.Lock()
         self.peer_id = generate_peer_id()
         self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
@@ -63,14 +77,21 @@ class Torrent(object):
         info_hash = hashlib.sha1(bencoder.encode(self.torrent_dict[b'info']))
         return info_hash.digest()
     def get_random_peer(self):
-        return random.choice(self.peer_addresses)
+        peer = random.choice(self.peer_addresses)
+        if peer[0] in self.handshaked_peers:
+            return self.handshaked_peers[peer[0]]
+        else:
+            return Peer(peer[0], peer[1], self)
     def download(self):
         for x in range(5):
             addr = random.choice(self.peer_addresses)
-            peer = Peer(addr[0],addr[1], self, "peer-" + str(x))
+            peer = Peer(addr[0],addr[1], self)
             thread = myThread(x, "peer-" + str(x), peer)
             thread.start()
+            self.threads.append(thread)
 
+    def get_thread_with_slowest_peer():
+        pass
     def get_peer_addresses(self):
         tracker_adress = self.torrent_dict[b'announce']
         r = requests.get(tracker_adress, params=self.torrent_payload)
@@ -97,11 +118,11 @@ class Torrent(object):
 
 
 class Peer(object):
-    def __init__(self, ip, port, torrent, thread_name):
-        self.thread_name = thread_name
+    def __init__(self, ip, port, torrent):
         self.choked = True
         self.interested = False
         self.ip = ip
+        self.handshaked = False
         self.port = port
         self.torrent = torrent
         """will be a long binary string with each index of the string says if peer got that piece (1) or not (0)"""
@@ -112,12 +133,6 @@ class Peer(object):
     @property
     def address(self):
         return (self.ip, (self.port))
-    def change_peer_and_handshake(self):
-        print("changing peer")
-        new_peer = self.torrent.get_random_peer()
-        self.ip = new_peer[0]
-        self.port = new_peer[1]
-        self.handshake()
     def msg_function(self, msg_type):
         #TODO add alot more types
         return {5:self.bitfield_msg,1:self.unchoke_msg, 4:self.have_msg, 7:self.piece_msg, 0:self.choke_msg}[msg_type]
@@ -127,6 +142,8 @@ class Peer(object):
         return handshake
 
     def handshake(self):
+        if self.handshaked:
+            return True
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setblocking(True)
         self.s.settimeout(0.5)
@@ -136,14 +153,17 @@ class Peer(object):
             self.s.send(self.get_packet())
             data = self.s.recv(68)
         except:
-            self.change_peer_and_handshake()
+            return False
 
         self.current_piece = None
         #TODO get location info through external source and other properties
         if not data:
-            self.change_peer_and_handshake()
-        self.s.settimeout(0.5)
-        self.msg_loop()
+            return False
+        #self.msg_loop()
+        self.s.settimeout(3)
+        handshake = True
+        self.torrent.handshaked_peers[self.ip] = self
+        return True
 
     def msg_loop(self):
         while True:
@@ -151,18 +171,21 @@ class Peer(object):
                 data = self.s.recv(5)
                 try:
                     size = int.from_bytes(data[0:4], byteorder='big')
-                    self.msg_function(data[4])(size)
+                    if(not self.msg_function(data[4])(size)):
+                        return False
                 except IndexError:
+                    print(data)
                     print("hahah yep")
                 except KeyError:
                     print("KeyError")
             except socket.error as e:
                 print(e)
-                self.change_peer_and_handshake()
+                return False
 
                 #TODO check data
 
     def request_piece(self):
+        print("REQUESTING PICEE")
         if self.choked:
             return
         i = 0
@@ -174,13 +197,13 @@ class Peer(object):
                 self.torrent.lock.release()
                 self.current_piece = Piece(self.current_piece_index , self.torrent.torrent_dict[b'info'][b'piece length'],)
                 self.s.send(self.current_piece.get_block_msg())
-                return
+                return True
             else:
                 if i > 5:
-                    self.change_peer_and_handshake()
+                    return False
                 self.current_piece_index += 1
         print("peer empty")
-        self.change_peer_and_handshake()
+        return False
 
     def piece_msg(self, size):
         data = self.s.recv(8)
@@ -199,32 +222,40 @@ class Peer(object):
                 if (a == 0):
                     print("we are done")
                     exit()
-                self.request_piece()
+                return self.request_piece()
             #TODO request next piece
         else:
             self.s.send(self.current_piece.get_block_msg())
+            return True
     def send_interest(self):
         msg = struct.pack('>Ib', 1, 2)
         print("sending intrest msg = {}".format(msg))
-        self.interested = True
         self.s.send(msg)
+        return True
 
     def bitfield_msg(self, size):
         data= self.s.recv(size)
         self.bitfield = str(bin(int.from_bytes(data, byteorder='big')))[2:]
         #TODO check if peer has any picecs we want:
-        interested = True
-        if interested:
+        self.interested = True
+        if self.interested:
             self.send_interest()
+            return True
+        return False
     def have_msg(self, size):
         self.s.recv(size)
+        return True
     def unchoke_msg(self, size):
+        print("unchoked")
         self.choked = False
         if self.interested:
             print("we are now unchoked requesting a piece")
             self.request_piece()
+            return True
+        return False
     def choke_msg(self,size):
-        self.change_peer_and_handshake()
+        choked = True
+        return False
 
 
 class Piece(object):
