@@ -6,6 +6,9 @@ import time, sys
 import threading
 
 from bitstring import BitArray
+
+download_count = 0
+
 VERSION = '0001'
 ALPHANUM = ascii_letters + digits
 DEFAULT_PORT = "55308"
@@ -14,6 +17,7 @@ CLIENT_NAME = "mytorrent"
 CLIENT_ID = "PY"
 CLIENT_VERSION = "0001"
 REQUEST_SIZE = 2 ** 14
+
 """
 rewrite of:
 src: https://www.safaribooksonline.com/library/view/python-cookbook-2nd/0596007973/ch04s22.html
@@ -92,6 +96,10 @@ class Torrent(object):
         self.pieces = len(self.torrent_dict[b'info'][b'pieces'])/20
         self.first_missing_index = 0
         self.bitfield = ["0"]*(len(self.torrent_dict[b"info"][b"pieces"])//20)
+
+        self.pieces_downloaded = 0
+        self.piece_downloaded_ref = [False for x in range(1100)]
+
         print(self.pieces)
     @property
     def torrent_payload(self):
@@ -181,16 +189,25 @@ class Torrent(object):
                 bitfield[i] == "-"
                 return i
     """
+    def get_piece_sequential(self, bitfield):
+        self.lock.acquire()
+        i = self.bitfield.index("0")
+        if not bitfield[i] == "1":
+            self.lock.release()
+            return False
+        self.bitfield[i] = "1"
+        self.lock.release()
+        return i
+
     def get_piece_zipf(self, bitfield, omega = 1.25):
         self.lock.acquire()
 
         self.first_missing_index = self.bitfield.index("0")
         relavant_bitfield = bitfield[self.first_missing_index:]
-        try:
-            probabilities = [(1-int(self.bitfield[i+self.first_missing_index]))*int(relavant_bitfield[i])/(i+1)**omega for i in range(len(relavant_bitfield))]
-        except Exception as e:
-            print(e)
+        probabilities = [(1-int(self.bitfield[i+self.first_missing_index]))*int(relavant_bitfield[i])/(i+1)**omega for i in range(len(relavant_bitfield))]
+
         if probabilities.count("0") == len(probabilities):
+            self.lock.release()
             return False
         piece_index = random_pick(relavant_bitfield, probabilities)
         self.bitfield[piece_index + self.first_missing_index] = "1"
@@ -278,7 +295,7 @@ class Peer(object):
                         if(not self.msg_function(data[4])(size)):
                             return False
                     except IndexError:
-                        print("hahah yep")
+                        print("Index error")
                     except KeyError:
                         print("KeyError")
                         print(data[4])
@@ -317,7 +334,7 @@ class Peer(object):
         print("peer empty")
         """
 
-        self.current_piece_index = self.torrent.get_piece_zipf(self.bitfield)
+        self.current_piece_index = self.torrent.get_piece_sequential(self.bitfield)
         if self.current_piece_index == False:
             return False
         print(self.current_piece_index)
@@ -326,6 +343,7 @@ class Peer(object):
             self.torrent.begun_pieces.pop(self.current_piece_index)
         else:
             self.current_piece = Piece(self.current_piece_index , self.torrent.torrent_dict[b'info'][b'piece length'],)
+
         self.s.send(self.current_piece.get_block_msg())
         return True
 
@@ -336,9 +354,20 @@ class Peer(object):
         self.pieces_since_start += 1
         if (self.current_piece.add_block(data)):
             if(self.current_piece.verify_piece(self.torrent.torrent_dict[b"info"][b"pieces"][self.current_piece.index*20: self.current_piece.index*20 + 20])):
+                self.torrent.pieces_downloaded += 1
+
+                #for plotting
+                self.torrent.piece_downloaded_ref[self.current_piece.index - 1] = True
                 self.torrent.bitfield[int(self.current_piece.index)] = "1"
                 a = self.torrent.bitfield.count("1")
-                print((a/self.torrent.pieces)*100)
+
+                # Find first idx that is not downloaded
+                idx = [i for i, x in enumerate(self.torrent.piece_downloaded_ref) if not x][0] # -1 ?
+                print(str(self.torrent.pieces_downloaded) + "," + str(idx) + ",", str(self.current_piece.index))
+
+                with open("tes.txt", "a") as f:
+                    f.write(str(self.torrent.pieces_downloaded) + "," + str(idx) + ",")
+                
                 if (a == 1100):
                     print("we are done")
                     exit()
@@ -430,6 +459,6 @@ class Piece(object):
 
 
 
-t = Torrent("/home/andell/BitTorrrent_streaming/archlinux-2018.03.01-x86_64.iso.torrent")
+t = Torrent("archlinux-2018.03.01-x86_64.iso.torrent")
 t.get_peer_addresses()
 t.download()
